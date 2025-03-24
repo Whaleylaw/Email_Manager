@@ -1,0 +1,12 @@
+Dear {name},
+
+Thank you for your email regarding {subject}.
+
+{response_content}
+
+Please let me know if you have any further questions or if you need any additional information. I'm here to help.
+
+Best regards,
+{attorney_name}
+{law_firm_name}
+{contact_information}

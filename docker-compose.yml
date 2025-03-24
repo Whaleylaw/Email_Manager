@@ -1,0 +1,27 @@
+services:
+  email-triage:
+    build: 
+      context: ./scripts
+      dockerfile: Dockerfile
+    restart: always
+    env_file: .env
+    volumes:
+      - ./logs:/app/logs
+    networks:
+      - email-network
+
+  streamlit-inbox:
+    build: 
+      context: ./streamlit-email-inbox
+      dockerfile: Dockerfile
+    restart: always
+    ports:
+      - "8501:8501"
+    env_file: .env
+    networks:
+      - email-network
+    command: streamlit run app.py --server.port=8501 --server.address=0.0.0.0 --server.enableCORS=false --server.enableXsrfProtection=false
+
+networks:
+  email-network:
+    driver: bridge
