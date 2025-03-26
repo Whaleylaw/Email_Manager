@@ -18,12 +18,14 @@ from supabase_utils import (
     get_similar_emails
 )
 from chatbot_integration import ChatbotIntegration
+from agent_integration import AgentIntegration
 
 # Load environment variables
 load_dotenv()
 
-# Initialize chatbot
+# Initialize integrations
 chatbot = ChatbotIntegration()
+agent = AgentIntegration()
 
 # HTML to Text converter
 html_converter = html2text.HTML2Text()
@@ -78,6 +80,8 @@ if 'page_size' not in st.session_state:
     st.session_state.page_size = 10
 if 'current_filter' not in st.session_state:
     st.session_state.current_filter = "all"
+if 'show_agent_analysis' not in st.session_state:
+    st.session_state.show_agent_analysis = True
 
 def format_date(date_string):
     """Format date string to a more readable format"""
@@ -107,10 +111,6 @@ def get_email_details(email_id):
     if not email:
         st.error("Error fetching email details")
     return email
-
-
-
-
 
 def render_sidebar():
     """Render the sidebar with email filters"""
@@ -178,6 +178,18 @@ def render_sidebar():
         st.session_state.page_size = page_size
         st.session_state.current_page = 1
         st.rerun()
+    
+    # Agent analysis toggle
+    st.sidebar.divider()
+    st.sidebar.subheader("Email Assistant")
+    show_agent = st.sidebar.checkbox(
+        "Show assistant insights", 
+        value=st.session_state.show_agent_analysis
+    )
+    
+    if show_agent != st.session_state.show_agent_analysis:
+        st.session_state.show_agent_analysis = show_agent
+        st.rerun()
 
 def render_email_list():
     """Render the email list panel"""
@@ -206,9 +218,16 @@ def render_email_list():
             
             # Email info in first column
             with cols[0]:
+                # Check if email has agent analysis
+                has_analysis = email.get('processed_by_agent', False)
+                
                 # Make the subject clickable
+                button_text = f"**{email['subject']}**"
+                if has_analysis and st.session_state.show_agent_analysis:
+                    button_text = f"🧠 {button_text}"  # Add brain emoji for analyzed emails
+                
                 if st.button(
-                    f"**{email['subject']}**", 
+                    button_text, 
                     key=f"email_{email['id']}",
                     use_container_width=True,
                     type="secondary"
@@ -253,6 +272,47 @@ def render_email_list():
                 st.session_state.current_page += 1
                 st.rerun()
 
+def render_agent_analysis(email_id):
+    """Render the agent's analysis of an email"""
+    if not st.session_state.show_agent_analysis:
+        return
+    
+    # Get the agent analysis
+    analysis = agent.get_agent_analysis(email_id)
+    
+    # If no analysis exists, offer to analyze
+    if not analysis:
+        st.info("This email hasn't been analyzed by the assistant yet.")
+        if st.button("Analyze Now", type="primary"):
+            with st.spinner("Analyzing email..."):
+                analysis = agent.analyze_email(email_id)
+                st.success("Analysis complete!")
+                st.rerun()
+        return
+    
+    # Format the analysis for Streamlit
+    formatted = agent.format_analysis_for_streamlit(analysis)
+    
+    if not formatted.get("success", False):
+        st.error(f"Error in analysis: {formatted.get('error', 'Unknown error')}")
+        return
+    
+    # Display each section
+    for section in formatted.get("sections", []):
+        title = section.get("title", "")
+        content = section.get("content", "")
+        content_type = section.get("type", "text")
+        
+        # Display different content types appropriately
+        if content_type == "text":
+            st.subheader(title)
+            st.write(content)
+        elif content_type == "list":
+            st.subheader(title)
+            for item in content:
+                st.write(f"• {item}")
+        # Add more content types as needed
+
 def render_email_detail():
     """Render the email detail panel"""
     if st.session_state.selected_email:
@@ -290,9 +350,15 @@ def render_email_detail():
             st.write(f"**Date:** {format_date(email_detail['received_date'])}")
             st.write(f"**Category:** {email_detail.get('category', '').capitalize()}")
             
+            # Display agent analysis if available and enabled
+            if st.session_state.show_agent_analysis:
+                st.divider()
+                with st.expander("📊 Email Assistant Insights", expanded=True):
+                    render_agent_analysis(email_detail['id'])
+            
             # Email body
             st.divider()
-            with st.expander("Email Body", expanded=True):
+            with st.expander("📧 Email Body", expanded=True):
                 # Clean the HTML content
                 cleaned_content = clean_html_content(email_detail['body'])
                 st.markdown(cleaned_content)
@@ -334,29 +400,66 @@ def render_chat_interface():
             
             # Add assistant message to chat history
             st.session_state.chat_messages.append({"role": "assistant", "content": response})
-            
+        
+        # Assistant actions
+        st.divider()
+        col1, col2 = st.columns(2)
+        
         # Generate email response button
-        if st.button("Generate Email Response Draft", use_container_width=True):
-            with st.spinner("Generating email response..."):
-                # Get a draft response for the email
-                draft = chatbot.generate_email_response(
-                    email_data=st.session_state.email_data
-                )
-                
-                # Create a new message with the draft
-                draft_message = {
-                    "role": "assistant",
-                    "content": f"**DRAFT EMAIL RESPONSE:**\n\n```\n{draft}\n```\n\nYou can modify this draft as needed."
-                }
-                
-                # Add to chat history
-                st.session_state.chat_messages.append(draft_message)
-                
-                # Force rerun to display the new message
-                st.rerun()
+        with col1:
+            if st.button("Generate Email Response Draft", use_container_width=True):
+                with st.spinner("Generating email response..."):
+                    # Get a draft response for the email
+                    draft = chatbot.generate_email_response(
+                        email_data=st.session_state.email_data
+                    )
+                    
+                    # Create a new message with the draft
+                    draft_message = {
+                        "role": "assistant",
+                        "content": f"**DRAFT EMAIL RESPONSE:**\n\n```\n{draft}\n```\n\nYou can modify this draft as needed."
+                    }
+                    
+                    # Add to chat history
+                    st.session_state.chat_messages.append(draft_message)
+                    
+                    # Force rerun to display the new message
+                    st.rerun()
+        
+        # Analyze with assistant button (if not already analyzed)
+        with col2:
+            email_id = st.session_state.selected_email
+            has_analysis = agent.get_agent_analysis(email_id) is not None
+            
+            if not has_analysis and st.session_state.show_agent_analysis:
+                if st.button("Analyze with Assistant", use_container_width=True):
+                    with st.spinner("Analyzing email..."):
+                        analysis = agent.analyze_email(email_id)
+                        st.success("Analysis complete!")
+                        
+                        # Create a chat message with a summary of the analysis
+                        if analysis and "summary" in analysis:
+                            summary_message = {
+                                "role": "assistant",
+                                "content": f"**EMAIL ANALYSIS:**\n\n{analysis['summary']}\n\nCheck the Email tab for detailed insights."
+                            }
+                            st.session_state.chat_messages.append(summary_message)
+                        
+                        st.rerun()
     else:
         # No email selected - show placeholder
         st.info("Select an email to chat about it")
+
+def render_agent_insights_tab():
+    """Render the tab with agent insights"""
+    if st.session_state.selected_email:
+        email_id = st.session_state.selected_email
+        
+        # Display agent analysis
+        render_agent_analysis(email_id)
+    else:
+        # No email selected - show placeholder
+        st.info("Select an email from the list to view insights")
 
 def main():
     """Main application function"""
@@ -379,13 +482,26 @@ def main():
     
     # Email detail and chat in second column
     with col2:
-        tabs = st.tabs(["Email", "Chat"])
-        
-        with tabs[0]:  # Email tab
-            render_email_detail()
+        # Create tabs - add Insights tab if agent is enabled
+        if st.session_state.show_agent_analysis:
+            tabs = st.tabs(["Email", "Chat", "Insights"])
             
-        with tabs[1]:  # Chat tab
-            render_chat_interface()
+            with tabs[0]:  # Email tab
+                render_email_detail()
+                
+            with tabs[1]:  # Chat tab
+                render_chat_interface()
+                
+            with tabs[2]:  # Insights tab
+                render_agent_insights_tab()
+        else:
+            tabs = st.tabs(["Email", "Chat"])
+            
+            with tabs[0]:  # Email tab
+                render_email_detail()
+                
+            with tabs[1]:  # Chat tab
+                render_chat_interface()
 
 if __name__ == "__main__":
     main()
